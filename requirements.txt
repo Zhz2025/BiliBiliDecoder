@@ -1,0 +1,9 @@
+# Core HTTP
+requests>=2.31
+
+# Local speech-to-text (FunASR Paraformer, optimized for Chinese)
+# This pulls in torch/torchaudio/modelscope on first install.
+funasr>=1.2.0
+
+# Bundled ffmpeg binary used as a fallback when system ffmpeg is missing
+imageio-ffmpeg>=0.5.0
