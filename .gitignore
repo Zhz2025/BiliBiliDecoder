@@ -6,6 +6,5 @@ venv/
 subtitles/
 models_cache/
 cookie.txt
-开发流程记录.md
 *.m4a
 *.part
