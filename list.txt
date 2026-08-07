@@ -1,0 +1,13 @@
+# ============================================
+# Bilibili subtitle download list (one entry per line).
+# Supported formats:
+#   1) video link     https://www.bilibili.com/video/BV1AiuJ6QE9q/
+#   2) BVID           BV1AiuJ6QE9q
+#   3) UP-main space  https://space.bilibili.com/87330354
+#   4) UP-main        up:87330354
+#   5) search         search:keyboard (e.g. search:关节电机)
+# Lines starting with # are ignored.
+# UP-main crawl count / keyword filter are configured in run.bat
+# ============================================
+
+https://www.bilibili.com/video/BV11m6jBdEBb?spm_id_from=333.1245.0.0

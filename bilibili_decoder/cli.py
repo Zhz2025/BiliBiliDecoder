@@ -165,6 +165,49 @@ def crawl_search(client: BilibiliClient, keyword: str, maximum: int) -> list[Vid
 
 
 # ----------------------------------------------------------------------
+# Multi-format list dispatch (used by `batch`)
+# ----------------------------------------------------------------------
+def classify_target(line: str):
+    """识别列表一行的类型：(kind, value)。kind ∈ video / up / search。"""
+    s = line.strip()
+    low = s.lower()
+    if low.startswith("search:"):
+        kw = s[len("search:"):].strip()
+        return ("search", kw) if kw else None
+    if low.startswith("up:"):
+        mid = parse_mid(s[len("up:"):])
+        return ("up", mid) if mid else None
+    bvid = parse_bvid(s)
+    if bvid:
+        return ("video", bvid)
+    mid = parse_mid(s)
+    if mid:
+        return ("up", mid)
+    return None
+
+
+def _dispatch_target(client: BilibiliClient, target: str, args: argparse.Namespace) -> None:
+    """按列表行类型分发：视频 / UP主 / 搜索。"""
+    classified = classify_target(target)
+    if not classified:
+        log.warning("跳过无法识别的行：%s", target)
+        return
+    kind, value = classified
+    if kind == "video":
+        process_video(client, value, args)
+    elif kind == "up":
+        videos = crawl_up(client, value, args)
+        log.info("UP主 %s：共 %d 个视频", value, len(videos))
+        for v in videos:
+            process_video(client, v.bvid, args)
+    else:  # search
+        videos = crawl_search(client, value, args.max)
+        log.info("搜索“%s”：共 %d 个视频", value, len(videos))
+        for v in videos:
+            process_video(client, v.bvid, args)
+
+
+# ----------------------------------------------------------------------
 # Cleanup
 # ----------------------------------------------------------------------
 def _dir_size(path: str) -> int:
@@ -268,8 +311,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_video = sub.add_parser("video", parents=[common], help="下载指定视频的字幕")
     p_video.add_argument("targets", nargs="+", help="视频链接或 BVID，可多个")
 
-    p_batch = sub.add_parser("batch", parents=[common], help="从文件批量处理（每行一个链接/BVID）")
-    p_batch.add_argument("-f", "--file", required=True, help="链接列表文件路径")
+    p_batch = sub.add_parser("batch", parents=[common], help="从列表文件批量处理（支持视频/UP主/搜索混合格式）")
+    p_batch.add_argument("-f", "--file", required=True, help="列表文件路径")
+    p_batch.add_argument("--all", action="store_true", help="列表中的 UP 主条目：抓取全部视频")
+    p_batch.add_argument("--recent", type=int, default=0, help="列表中的 UP 主条目：抓取最近 N 个（默认 30）")
+    p_batch.add_argument("--tag", default="", help="列表中的 UP 主条目：仅处理标题含该关键词的视频")
+    p_batch.add_argument("--max", type=int, default=20, help="列表中的 search 条目：最多处理结果数")
 
     p_up = sub.add_parser("up", parents=[common], help="爬取某 UP 主的视频字幕")
     p_up.add_argument("target", help="UP主 mid 或空间页链接")
@@ -311,8 +358,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                     if ln.strip() and not ln.lstrip().startswith("#")
                 )
         except OSError as exc:
-            log.error("无法读取 Cookie 文件：%s", exc)
-            return 1
+            log.warning(
+                "Cookie 文件无法读取（%s），将以匿名模式继续，可能拿不到现成字幕", exc
+            )
     client = BilibiliClient(cookie=cookie)
     os.makedirs(args.out, exist_ok=True)
 
@@ -329,6 +377,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         except OSError as exc:
             log.error("无法读取列表文件：%s", exc)
             return 1
+        for target in targets:
+            try:
+                _dispatch_target(client, target, args)
+            except Exception as exc:  # noqa: BLE001
+                log.error("处理失败 %s：%s", target, exc)
+        return 0
     elif args.command == "up":
         mid = parse_mid(args.target)
         if not mid:

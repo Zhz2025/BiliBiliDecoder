@@ -43,6 +43,24 @@ SESSDATA=你的值
 
 `cookie.txt` 已在 `.gitignore` 中，不会被提交。
 
+## 双击运行（最快上手）
+
+无需敲命令，直接用列表文件 + 批处理：
+
+1. 编辑 **`list.txt`**，每行一个条目，支持多种格式（`#` 开头为注释）：
+
+   ```
+   https://www.bilibili.com/video/BV1AiuJ6QE9q/   # 视频链接
+   BV1s2421Z7qJ                                   # BVID
+   https://space.bilibili.com/87330354            # UP 主空间链接
+   up:87330354                                    # 指定 UP 主
+   search:关节电机                                 # 关键词搜索
+   ```
+
+2. 双击 **`run.bat`** 即可，字幕输出到 `subtitles\UP主名\`。
+
+`run.bat` 顶部可配置：`LIST`（列表文件）、`OUT`（输出目录）、`RECENT`（列表中的 UP 主抓取数量：`ALL`=全部 / 数字=最近 N 个）、`TAG`（标题关键词筛选）、`MAX`（搜索条目的结果数）。
+
 ## 使用
 
 所有命令加 `--cookie-file cookie.txt` 即可读取登录态。
@@ -54,13 +72,15 @@ SESSDATA=你的值
 :: 支持多个：video URL1 URL2 ...
 ```
 
-### 2. 批量（URL 列表文件）
+### 2. 批量（列表文件，支持多格式混合）
 
-`list.txt` 每行一个链接或 BVID（`#` 开头为注释）：
+`list.txt` 每行一个条目（`#` 开头为注释），支持视频链接 / BVID / UP 主 / 搜索混排（格式见"双击运行"一节）：
 
 ```bat
 .venv\Scripts\python.exe -m bilibili_decoder batch -f list.txt --cookie-file cookie.txt
 ```
+
+`batch` 也支持 UP 主/搜索的控制参数：`--all`（UP主全部）、`--recent N`（UP主最近N个）、`--tag 关键词`（UP主标题筛选）、`--max N`（搜索结果数）。
 
 ### 3. 按 UP 主爬取
 
