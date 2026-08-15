@@ -9,5 +9,5 @@
 # Lines starting with # are ignored.
 # UP-main crawl count / keyword filter are configured in run.bat
 # ============================================
-
-https://www.bilibili.com/video/BV11m6jBdEBb?spm_id_from=333.1245.0.0
+https://www.bilibili.com/video/BV1RuuQ68EmT?spm_id_from=333.788.videopod.episodes&vd_source=cd8ca7ea97de122b2a3268cd7a613364&p=2
+https://www.bilibili.com/video/BV16xu364ErZ?spm_id_from=333.788.videopod.episodes&vd_source=cd8ca7ea97de122b2a3268cd7a613364&p=2

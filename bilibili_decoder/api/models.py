@@ -17,6 +17,15 @@ def sanitize_name(text: str, fallback: str = "unknown") -> str:
 
 
 @dataclass
+class VideoPart:
+    """A single part (P) of a multi-part video."""
+    cid: int
+    page: int       # 1-based part number
+    part: str       # part title
+    duration: int   # seconds
+
+
+@dataclass
 class VideoInfo:
     bvid: str
     aid: int
@@ -28,6 +37,12 @@ class VideoInfo:
     desc: str = ""
     pic: str = ""
     pubdate: int = 0
+    pages: list[VideoPart] = field(default_factory=list)
+
+    @property
+    def is_multi(self) -> bool:
+        """True if this video has more than one part (P)."""
+        return len(self.pages) > 1
 
     @property
     def safe_title(self) -> str:

@@ -9,7 +9,7 @@ from typing import Optional
 
 import requests
 
-from .models import SubtitleInfo, VideoInfo
+from .models import SubtitleInfo, VideoInfo, VideoPart
 from .wbi import enc_wbi, extract_key_from_url
 
 log = logging.getLogger(__name__)
@@ -125,6 +125,15 @@ class BilibiliClient:
         ).get("data")
         if not data:
             raise RuntimeError(f"Video not found or unavailable: {bvid}")
+        pages = [
+            VideoPart(
+                cid=int(p.get("cid", 0) or 0),
+                page=int(p.get("page", 1) or 1),
+                part=p.get("part", ""),
+                duration=int(p.get("duration", 0) or 0),
+            )
+            for p in (data.get("pages") or [])
+        ]
         return VideoInfo(
             bvid=data["bvid"],
             aid=data["aid"],
@@ -136,6 +145,7 @@ class BilibiliClient:
             desc=data.get("desc", ""),
             pic=data.get("pic", ""),
             pubdate=int(data.get("pubdate", 0)),
+            pages=pages,
         )
 
     # ------------------------------------------------------------------

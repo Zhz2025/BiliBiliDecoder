@@ -18,7 +18,7 @@ import tempfile
 from typing import Optional
 
 from .api.client import BilibiliClient, parse_bvid, parse_mid
-from .api.models import VideoInfo, sanitize_name
+from .api.models import VideoInfo, VideoPart, sanitize_name
 from .fetch import media, subtitles
 from .output import markdown as md_out
 from .output import srt as srt_out
@@ -44,11 +44,29 @@ def _fmt_dur(secs: int) -> str:
 # ----------------------------------------------------------------------
 # Core processing
 # ----------------------------------------------------------------------
+def _output_base(video: VideoInfo, label: str, out_dir: str) -> str:
+    base_name = f"{video.safe_title} [{video.bvid}]"
+    if label:
+        base_name += f" {label}"
+    return os.path.join(out_dir, base_name)
+
+
 def _write_outputs(
-    segments: list, video: VideoInfo, out_dir: str, source: str, formats: list[str]
+    segments: list,
+    video: VideoInfo,
+    part: VideoPart | None,
+    label: str,
+    out_dir: str,
+    source: str,
+    formats: list[str],
 ) -> list[str]:
-    base = os.path.join(out_dir, f"{video.safe_title} [{video.bvid}]")
+    base = _output_base(video, label, out_dir)
+
     url = f"https://www.bilibili.com/video/{video.bvid}"
+    if part and part.page > 1:
+        url += f"?p={part.page}"
+    md_title = video.title + (f"（{label}）" if label else "")
+
     written: list[str] = []
     for fmt in formats:
         if fmt == "srt":
@@ -56,7 +74,7 @@ def _write_outputs(
             srt_out.write_srt(path, segments)
         elif fmt == "md":
             path = base + ".md"
-            md_out.write_markdown(path, segments, title=video.title, url=url, source=source)
+            md_out.write_markdown(path, segments, title=md_title, url=url, source=source)
         else:
             log.warning("Unsupported format: %s", fmt)
             continue
@@ -72,25 +90,75 @@ def _up_dir(args: argparse.Namespace, video: VideoInfo) -> str:
     return up_dir
 
 
-def _transcribe_video(client: BilibiliClient, video: VideoInfo, out_dir: str,
-                      keep_audio: bool, hotword: str) -> list:
+def _transcribe_video(client: BilibiliClient, video: VideoInfo, cid: int,
+                      out_dir: str, keep_audio: bool, hotword: str,
+                      label: str = "") -> list:
     # 中间文件（音频、16k wav）一律放临时目录，用完自动清理；
     # 仅 --keep-audio 时把原始 .m4a 保留到 UP 主目录。
     tmp = tempfile.TemporaryDirectory(prefix="bilisub_")
     try:
         if keep_audio:
             os.makedirs(out_dir, exist_ok=True)
-            m4a = os.path.join(out_dir, f"{video.safe_title} [{video.bvid}].m4a")
+            fname = f"{video.safe_title} [{video.bvid}]"
+            if label:
+                fname += f" {label}"
+            m4a = os.path.join(out_dir, fname + ".m4a")
         else:
             m4a = os.path.join(tmp.name, "audio.m4a")
         log.info("  Downloading audio stream...")
-        media.download_audio(client.get_audio_url(video.bvid, video.cid), m4a)
+        media.download_audio(client.get_audio_url(video.bvid, cid), m4a)
         wav = os.path.join(tmp.name, "audio_16k.wav")
         log.info("  Converting audio to 16 kHz WAV...")
         media.to_16k_wav(m4a, wav)
         return stt_engine.transcribe(wav, hotword=hotword)
     finally:
         tmp.cleanup()
+
+
+def _part_label(part: VideoPart) -> str:
+    part_title = sanitize_name(part.part, fallback="")
+    return f"P{part.page}" + (f"-{part_title}" if part_title else "")
+
+
+def _process_one(client: BilibiliClient, bvid: str, video: VideoInfo,
+                 part: VideoPart, is_multi: bool, up_dir: str,
+                 args: argparse.Namespace) -> None:
+    """Process a single part (P) of a video."""
+    label = _part_label(part) if is_multi else ""
+    prefix = f"  [{label}] " if label else "  "
+
+    # --skip-existing: 目标文件已存在则跳过，避免重复转写
+    if args.skip_existing:
+        base = _output_base(video, label, up_dir)
+        existing = [
+            f for f in _out_formats(args.formats) if os.path.exists(base + "." + f)
+        ]
+        if existing:
+            log.info("%s已存在（%s），跳过", prefix, ",".join(existing))
+            return
+
+    segments: Optional[list] = None
+    source = ""
+    if not args.force_stt:
+        segments = subtitles.fetch_segments(client, bvid, part.cid, prefer=args.lang)
+        if segments:
+            source = f"AI字幕（{args.lang}）"
+
+    if segments is None:
+        if args.no_stt:
+            log.info("%s无AI字幕；已设置 --no-stt，跳过", prefix)
+            return
+        log.info("%s无AI字幕，启动本地语音转写（FunASR）...", prefix)
+        segments = _transcribe_video(
+            client, video, part.cid, up_dir, args.keep_audio, args.hotword, label
+        )
+        source = "STT（FunASR Paraformer）"
+
+    if not segments:
+        log.warning("%s未生成任何转写内容", prefix)
+        return
+    _write_outputs(segments, video, part if is_multi else None, label, up_dir,
+                   source, _out_formats(args.formats))
 
 
 def process_video(client: BilibiliClient, bvid: str, args: argparse.Namespace) -> None:
@@ -100,26 +168,15 @@ def process_video(client: BilibiliClient, bvid: str, args: argparse.Namespace) -
         bvid, video.title, _fmt_dur(video.duration), video.owner_name or "?",
     )
     up_dir = _up_dir(args, video)
-
-    segments: Optional[list] = None
-    source = ""
-    if not args.force_stt:
-        segments = subtitles.fetch_segments(client, bvid, video.cid, prefer=args.lang)
-        if segments:
-            source = f"AI字幕（{args.lang}）"
-
-    if segments is None:
-        if args.no_stt:
-            log.info("  无AI字幕；已设置 --no-stt，跳过（如需转写请去掉该参数）")
-            return
-        log.info("  无AI字幕，启动本地语音转写（FunASR）...")
-        segments = _transcribe_video(client, video, up_dir, args.keep_audio, args.hotword)
-        source = "STT（FunASR Paraformer）"
-
-    if not segments:
-        log.warning("  未生成任何转写内容：%s", bvid)
-        return
-    _write_outputs(segments, video, up_dir, source, _out_formats(args.formats))
+    pages = video.pages or [VideoPart(cid=video.cid, page=1, part="", duration=video.duration)]
+    is_multi = len(pages) > 1
+    if is_multi:
+        log.info("  共 %d P，将逐个下载", len(pages))
+    for part in pages:
+        try:
+            _process_one(client, bvid, video, part, is_multi, up_dir, args)
+        except Exception as exc:  # noqa: BLE001
+            log.error("  处理失败：%s", exc)
 
 
 # ----------------------------------------------------------------------
@@ -299,6 +356,10 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--formats", default=None, help="输出格式，逗号分隔：srt,md（默认 srt,md）")
     common.add_argument("--no-stt", action="store_true", help="仅下载已有AI字幕，不做本地转写")
     common.add_argument("--force-stt", action="store_true", help="强制本地转写，忽略已有AI字幕")
+    common.add_argument(
+        "--skip-existing", action="store_true",
+        help="目标文件已存在则跳过（避免重复转写/下载）",
+    )
     common.add_argument("--lang", default="zh", help="优先字幕语言（默认 zh）")
     common.add_argument("--hotword", default="", help="STT 热词，逗号分隔，如：电机,机器人")
     common.add_argument("--keep-audio", action="store_true", help="保留下载的音频文件")

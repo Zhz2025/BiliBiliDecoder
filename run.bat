@@ -22,6 +22,9 @@ set "TAG="
 REM Max results for "search:" entries in list
 set "MAX=20"
 
+REM Skip parts that are already downloaded (avoid re-transcribing). 1 = on, 0 = off
+set "SKIP=1"
+
 REM ------------------------------------------------------------
 if not exist ".venv\Scripts\python.exe" goto :error_venv
 if not exist "%LIST%" goto :error_list
@@ -31,6 +34,7 @@ if /I "%RECENT%"=="ALL" set "CMD=%CMD% --all"
 if not "%RECENT%"=="ALL" set "CMD=%CMD% --recent %RECENT%"
 if not "%TAG%"=="" set "CMD=%CMD% --tag %TAG%"
 set "CMD=%CMD% --max %MAX%"
+if "%SKIP%"=="1" set "CMD=%CMD% --skip-existing"
 
 if not exist cookie.txt echo [WARN] cookie.txt not found - official subtitles unavailable (STT only).
 
