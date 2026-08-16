@@ -61,16 +61,50 @@ def download_audio(url: str, dest_m4a: str) -> str:
     )
 
 
-def to_16k_wav(src: str, dest_wav: str) -> str:
-    """Convert any audio file to 16 kHz mono WAV (required by FunASR Paraformer)."""
+def to_16k_wav(src: str, dest_wav: str, volume: float = 1.0, loudnorm: bool = False) -> str:
+    """Convert any audio/video file to 16 kHz mono WAV (required by FunASR).
+
+    `volume` is an ffmpeg volume multiplier (1.0 = unchanged, 5.0 = 5x louder).
+    `loudnorm` uses ffmpeg loudness normalization (auto-boost + limiter, best
+    for very quiet recordings).
+    """
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise RuntimeError(
             "ffmpeg not found. Install it (e.g. `winget install ffmpeg`) or run "
             "`pip install imageio-ffmpeg` to use the bundled binary."
         )
-    cmd = [ffmpeg, "-y", "-i", src, "-ar", "16000", "-ac", "1", "-vn", dest_wav]
+    cmd = [ffmpeg, "-y", "-i", src, "-ar", "16000", "-ac", "1"]
+    if loudnorm:
+        # 目标响度 -16 LUFS（对话常用），真峰值 -1.5dBTP，自动放大并限幅
+        cmd += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+    elif volume and volume != 1.0:
+        cmd += ["-af", f"volume={volume}"]
+    cmd += ["-vn", dest_wav]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg conversion failed: {proc.stderr[-500:]}")
     return dest_wav
+
+
+def amplify_video(src: str, dest_mp4: str, loudnorm: bool = False, volume: float = 1.0) -> str:
+    """Write an amplified copy of a video: video stream copied, audio re-encoded.
+
+    Used to produce a listenable, louder version of a quiet recording.
+    """
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError(
+            "ffmpeg not found. Install it (e.g. `winget install ffmpeg`) or run "
+            "`pip install imageio-ffmpeg` to use the bundled binary."
+        )
+    cmd = [ffmpeg, "-y", "-i", src]
+    if loudnorm:
+        cmd += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+    elif volume and volume != 1.0:
+        cmd += ["-af", f"volume={volume}"]
+    cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", dest_mp4]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg amplify failed: {proc.stderr[-500:]}")
+    return dest_mp4

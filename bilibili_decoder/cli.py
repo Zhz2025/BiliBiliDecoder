@@ -161,6 +161,65 @@ def _process_one(client: BilibiliClient, bvid: str, video: VideoInfo,
                    source, _out_formats(args.formats))
 
 
+def process_local_file(path: str, args: argparse.Namespace) -> None:
+    """Transcribe a local video/audio file: extract audio -> FunASR -> srt/md."""
+    if not os.path.isfile(path):
+        log.error("文件不存在：%s", path)
+        return
+    video = VideoInfo(
+        bvid="LOCAL",
+        aid=0,
+        cid=0,
+        title=os.path.splitext(os.path.basename(path))[0],
+        duration=0,
+        owner_mid=0,
+        owner_name="本地视频",
+    )
+    log.info("[本地] %s", path)
+    with tempfile.TemporaryDirectory(prefix="bilisub_") as tmp:
+        wav = os.path.join(tmp, "audio_16k.wav")
+        if args.loudnorm:
+            log.info("  提取音频并转换 16k WAV（响度归一化自动放大）...")
+        elif args.volume and args.volume != 1.0:
+            log.info("  提取音频并转换 16k WAV（音量放大 %.1fx）...", args.volume)
+        else:
+            log.info("  提取音频并转换 16k WAV（ffmpeg）...")
+        media.to_16k_wav(path, wav, volume=args.volume, loudnorm=args.loudnorm)
+        log.info("  本地转写（FunASR）...")
+        segments = stt_engine.transcribe(wav, hotword=args.hotword)
+
+    if not segments:
+        log.warning("  未生成任何转写内容：%s", path)
+        # 仍可导出放大版视频
+        _maybe_export_amplified(path, args)
+        return
+
+    # 输出到视频文件同目录，同名 .srt/.md
+    base = os.path.splitext(path)[0]
+    source = "STT（FunASR Paraformer）本地文件"
+    srt_out.write_srt(base + ".srt", segments)
+    md_out.write_markdown(
+        base + ".md", segments,
+        title=video.title, url=os.path.abspath(path), source=source,
+    )
+    log.info("  -> %s.srt (%s)", base, source)
+    log.info("  -> %s.md (%s)", base, source)
+    _maybe_export_amplified(path, args)
+
+
+def _maybe_export_amplified(path: str, args: argparse.Namespace) -> None:
+    """--save-video 时，在视频同目录导出放大后的 mp4（音轨 loudnorm/volume）。"""
+    if not args.save_video:
+        return
+    amp_path = os.path.splitext(path)[0] + "_放大.mp4"
+    if os.path.exists(amp_path):
+        log.info("  放大版视频已存在，跳过：%s", amp_path)
+        return
+    log.info("  导出放大版视频 -> %s ...", amp_path)
+    media.amplify_video(path, amp_path, loudnorm=args.loudnorm, volume=args.volume)
+    log.info("  -> %s", amp_path)
+
+
 def process_video(client: BilibiliClient, bvid: str, args: argparse.Namespace) -> None:
     video = client.get_video_info(bvid)
     log.info(
@@ -224,9 +283,19 @@ def crawl_search(client: BilibiliClient, keyword: str, maximum: int) -> list[Vid
 # ----------------------------------------------------------------------
 # Multi-format list dispatch (used by `batch`)
 # ----------------------------------------------------------------------
+# 本地媒体文件扩展名（list.txt 里出现这类行时按本地文件转写处理）
+MEDIA_EXTS = (
+    ".mp4", ".mkv", ".flv", ".mov", ".avi", ".webm", ".ts",
+    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".wma",
+)
+
+
 def classify_target(line: str):
-    """识别列表一行的类型：(kind, value)。kind ∈ video / up / search。"""
+    """识别列表一行的类型：(kind, value)。kind ∈ local / video / up / search。"""
     s = line.strip()
+    # 去掉首尾引号（路径可能带引号）
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        s = s[1:-1]
     low = s.lower()
     if low.startswith("search:"):
         kw = s[len("search:"):].strip()
@@ -234,6 +303,11 @@ def classify_target(line: str):
     if low.startswith("up:"):
         mid = parse_mid(s[len("up:"):])
         return ("up", mid) if mid else None
+    # 本地视频/音频文件：存在，或带媒体扩展名
+    if os.path.isfile(s):
+        return ("local", s)
+    if low.endswith(MEDIA_EXTS):
+        return ("local", s)
     bvid = parse_bvid(s)
     if bvid:
         return ("video", bvid)
@@ -244,13 +318,15 @@ def classify_target(line: str):
 
 
 def _dispatch_target(client: BilibiliClient, target: str, args: argparse.Namespace) -> None:
-    """按列表行类型分发：视频 / UP主 / 搜索。"""
+    """按列表行类型分发：本地文件 / 视频 / UP主 / 搜索。"""
     classified = classify_target(target)
     if not classified:
         log.warning("跳过无法识别的行：%s", target)
         return
     kind, value = classified
-    if kind == "video":
+    if kind == "local":
+        process_local_file(value, args)
+    elif kind == "video":
         process_video(client, value, args)
     elif kind == "up":
         videos = crawl_up(client, value, args)
@@ -369,10 +445,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="从文件读取 Cookie 字符串（更安全，文件内只放 Cookie 内容）",
     )
 
+    # 本地文件转写相关选项（local 命令与 batch 列表中的本地文件条目共用）
+    local_opts = argparse.ArgumentParser(add_help=False)
+    local_opts.add_argument(
+        "--volume", type=float, default=1.0,
+        help="音频放大倍数（默认 1.0 不变；音频很轻时可用如 5.0/10.0）",
+    )
+    local_opts.add_argument(
+        "--loudnorm", action="store_true",
+        help="响度归一化自动放大（音频很轻时推荐，自动限幅防削波）",
+    )
+    local_opts.add_argument(
+        "--save-video", action="store_true",
+        help="同时导出放大版视频（同目录 原名_放大.mp4，音轨 loudnorm/volume）",
+    )
+
     p_video = sub.add_parser("video", parents=[common], help="下载指定视频的字幕")
     p_video.add_argument("targets", nargs="+", help="视频链接或 BVID，可多个")
 
-    p_batch = sub.add_parser("batch", parents=[common], help="从列表文件批量处理（支持视频/UP主/搜索混合格式）")
+    p_batch = sub.add_parser(
+        "batch", parents=[common, local_opts],
+        help="从列表文件批量处理（支持本地文件/视频/UP主/搜索混合格式）",
+    )
     p_batch.add_argument("-f", "--file", required=True, help="列表文件路径")
     p_batch.add_argument("--all", action="store_true", help="列表中的 UP 主条目：抓取全部视频")
     p_batch.add_argument("--recent", type=int, default=0, help="列表中的 UP 主条目：抓取最近 N 个（默认 30）")
@@ -395,6 +489,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--models", action="store_true",
         help="同时删除 STT 模型缓存 models_cache（约 2GB，下次转写需重新下载）",
     )
+
+    p_local = sub.add_parser(
+        "local", parents=[common, local_opts],
+        help="转写本地视频/音频文件（提取音频 + FunASR，输出同名 srt/md）",
+    )
+    p_local.add_argument("targets", nargs="+", help="本地文件路径，可多个")
 
     return parser
 
@@ -465,6 +565,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 process_video(client, v.bvid, args)
             except Exception as exc:  # noqa: BLE001
                 log.error("处理失败 %s：%s", v.bvid, exc)
+        return 0
+    elif args.command == "local":
+        for target in args.targets:
+            try:
+                process_local_file(target, args)
+            except Exception as exc:  # noqa: BLE001
+                log.error("处理失败 %s：%s", target, exc)
         return 0
     else:
         log.error("未知命令：%s", args.command)

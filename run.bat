@@ -25,6 +25,12 @@ set "MAX=20"
 REM Skip parts that are already downloaded (avoid re-transcribing). 1 = on, 0 = off
 set "SKIP=1"
 
+REM Local-file entries in list: loudnorm auto-amplify (1 = on, 0 = off)
+set "LOUDNORM=0"
+
+REM Local-file entries in list: also export amplified video (1 = on, 0 = off)
+set "SAVE_VIDEO=0"
+
 REM ------------------------------------------------------------
 if not exist ".venv\Scripts\python.exe" goto :error_venv
 if not exist "%LIST%" goto :error_list
@@ -35,6 +41,8 @@ if not "%RECENT%"=="ALL" set "CMD=%CMD% --recent %RECENT%"
 if not "%TAG%"=="" set "CMD=%CMD% --tag %TAG%"
 set "CMD=%CMD% --max %MAX%"
 if "%SKIP%"=="1" set "CMD=%CMD% --skip-existing"
+if "%LOUDNORM%"=="1" set "CMD=%CMD% --loudnorm"
+if "%SAVE_VIDEO%"=="1" set "CMD=%CMD% --save-video"
 
 if not exist cookie.txt echo [WARN] cookie.txt not found - official subtitles unavailable (STT only).
 

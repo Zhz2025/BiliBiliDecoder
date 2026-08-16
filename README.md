@@ -56,11 +56,12 @@ SESSDATA=你的值
    https://space.bilibili.com/87330354            # UP 主空间链接
    up:87330354                                    # 指定 UP 主
    search:关节电机                                 # 关键词搜索
+   D:\videos\我的视频.mp4                          # 本地视频/音频（直接本地转写）
    ```
 
-2. 双击 **`run.bat`** 即可，字幕输出到 `subtitles\UP主名\`。
+2. 双击 **`run.bat`** 即可，字幕输出到 `subtitles\UP主名\`；本地文件的字幕输出到**视频同目录**。
 
-`run.bat` 顶部可配置：`LIST`（列表文件）、`OUT`（输出目录）、`RECENT`（列表中的 UP 主抓取数量：`ALL`=全部 / 数字=最近 N 个）、`TAG`（标题关键词筛选）、`MAX`（搜索条目的结果数）。
+`run.bat` 顶部可配置：`LIST`（列表文件）、`OUT`（输出目录）、`RECENT`（列表中的 UP 主抓取数量：`ALL`=全部 / 数字=最近 N 个）、`TAG`（标题关键词筛选）、`MAX`（搜索条目的结果数）、`SKIP`（已下载跳过，默认 1）、`LOUDNORM`（列表本地文件响度放大，默认 0）、`SAVE_VIDEO`（列表本地文件同时导出放大视频，默认 0）。
 
 ## 使用
 
@@ -75,13 +76,13 @@ SESSDATA=你的值
 
 ### 2. 批量（列表文件，支持多格式混合）
 
-`list.txt` 每行一个条目（`#` 开头为注释），支持视频链接 / BVID / UP 主 / 搜索混排（格式见"双击运行"一节）：
+`list.txt` 每行一个条目（`#` 开头为注释），支持**本地文件 / 视频链接 / BVID / UP 主 / 搜索**混排（格式见"双击运行"一节）：
 
 ```bat
 .venv\Scripts\python.exe -m bilibili_decoder batch -f list.txt --cookie-file cookie.txt
 ```
 
-`batch` 也支持 UP 主/搜索的控制参数：`--all`（UP主全部）、`--recent N`（UP主最近N个）、`--tag 关键词`（UP主标题筛选）、`--max N`（搜索结果数）。
+`batch` 也支持 UP 主/搜索的控制参数：`--all`（UP主全部）、`--recent N`（UP主最近N个）、`--tag 关键词`（UP主标题筛选）、`--max N`（搜索结果数）；列表中的本地文件条目支持 `--loudnorm` / `--volume` / `--save-video`（见第 7 节）。
 
 ### 3. 按 UP 主爬取
 
@@ -130,6 +131,23 @@ UP 主 mid 可从其空间页链接获得（`https://space.bilibili.com/87330354
 > 转写过程产生的音频、16k wav 中间文件放在系统临时目录，**用后自动清理**；
 > 只有加 `--keep-audio` 时才会把原始 `.m4a` 保留到 UP 主目录。
 
+### 7. 转写本地视频 / 音频文件
+
+```bat
+:: 提取音频 + FunASR 转写，在视频同目录生成同名 .srt/.md
+.venv\Scripts\python.exe -m bilibili_decoder local "D:\视频\我的视频.mp4"
+:: 支持多个文件（mp4/mkv/flv/mp3/wav...）
+.venv\Scripts\python.exe -m bilibili_decoder local a.mp4 b.wav
+
+:: 音频很轻时：响度归一化自动放大（推荐）+ 同时导出放大版视频
+.venv\Scripts\python.exe -m bilibili_decoder local "D:\视频\很轻.mp4" --loudnorm --save-video
+
+:: 或手动指定放大倍数
+.venv\Scripts\python.exe -m bilibili_decoder local a.mp4 --volume 5
+```
+
+> 本地文件也可以直接写进 `list.txt`，用 `batch` 一起批量处理（同样支持 `--loudnorm` 等参数）。
+
 ### 常用参数
 
 | 参数 | 说明 |
@@ -142,6 +160,9 @@ UP 主 mid 可从其空间页链接获得（`https://space.bilibili.com/87330354
 | `--skip-existing` | 目标文件已存在则跳过（避免重复转写/下载，`run.bat` 默认开启） |
 | `--hotword 电机,机器人` | 转写热词（可提升特定词汇准确率） |
 | `--keep-audio` | 保留下载的音频（.m4a） |
+| `--volume 5` | 本地转写音频放大倍数（默认 1.0） |
+| `--loudnorm` | 本地转写响度归一化自动放大（音频很轻时推荐） |
+| `--save-video` | 本地转写同时导出放大版视频（原名_放大.mp4） |
 | `--cookie-file cookie.txt` | 从文件读取登录 Cookie |
 | `-v` | 输出调试日志 |
 
@@ -177,6 +198,7 @@ subtitles/
 - 登录后才可见的视频（会员/充电等）需要对应权限的 Cookie
 - 首次使用 STT 会下载约 2 GB 模型到 `models_cache`（在项目所在盘），之后离线可用；删除该目录可释放空间
 - 转写输出无标点（FunASR 标点模型句对齐失败的已知现象），但时间戳完整
+- **转写速度（batch_size_s）**：`stt/engine.py` 里 `batch_size_s=300`（默认每批处理 300 秒音频）。把它调大（如 600）可让多核 CPU 更快、内存占用略增，**识别结果完全一致**（批大小只影响并行计算，不影响准确率）；调小则更慢但更省内存。这是纯并行优化，改不改都不影响识别内容。
 
 ## 目录结构
 

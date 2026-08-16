@@ -1,0 +1,50 @@
+2026-08-15 21:30:47,222 INFO ===== 开始 7.29课程回放.mp4 (loudnorm=True) =====
+2026-08-15 21:30:47,223 INFO 放大版已存在，跳过
+2026-08-15 21:30:47,225 INFO 提取音频(16k + loudnorm) ...
+2026-08-15 21:32:20,615 INFO 转写中 ...
+2026-08-15 21:32:31,476 INFO Loading FunASR models (first run downloads them, this can take a while)...
+2026-08-15 21:32:31,476 INFO download models from model hub: ms
+2026-08-15 21:32:36,400 WARNING trust_remote_code: False
+2026-08-15 21:32:38,464 INFO Loading pretrained params from E:\BiliBiliDecoder\models_cache\models\iic--speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch\snapshots\master\model.pt
+2026-08-15 21:32:38,472 INFO ckpt: E:\BiliBiliDecoder\models_cache\models\iic--speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch\snapshots\master\model.pt
+2026-08-15 21:32:39,399 INFO scope_map: ['module.', 'None']
+2026-08-15 21:32:39,399 INFO excludes: None
+2026-08-15 21:32:39,833 INFO Loading ckpt: E:\BiliBiliDecoder\models_cache\models\iic--speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch\snapshots\master\model.pt, status: <All keys matched successfully>
+2026-08-15 21:32:39,854 INFO Building VAD model.
+2026-08-15 21:32:39,854 INFO download models from model hub: ms
+2026-08-15 21:32:42,103 WARNING trust_remote_code: False
+2026-08-15 21:32:42,113 INFO Loading pretrained params from E:\BiliBiliDecoder\models_cache\models\iic--speech_fsmn_vad_zh-cn-16k-common-pytorch\snapshots\master\model.pt
+2026-08-15 21:32:42,113 INFO ckpt: E:\BiliBiliDecoder\models_cache\models\iic--speech_fsmn_vad_zh-cn-16k-common-pytorch\snapshots\master\model.pt
+2026-08-15 21:32:42,122 INFO scope_map: ['module.', 'None']
+2026-08-15 21:32:42,122 INFO excludes: None
+2026-08-15 21:32:42,123 INFO Loading ckpt: E:\BiliBiliDecoder\models_cache\models\iic--speech_fsmn_vad_zh-cn-16k-common-pytorch\snapshots\master\model.pt, status: <All keys matched successfully>
+2026-08-15 21:32:42,124 INFO Building punc model.
+2026-08-15 21:32:42,124 INFO download models from model hub: ms
+2026-08-15 21:32:46,751 WARNING trust_remote_code: False
+2026-08-15 21:32:49,383 DEBUG Building prefix dict from the default dictionary ...
+2026-08-15 21:32:49,383 DEBUG Loading model from cache C:\Users\Study\AppData\Local\Temp\jieba.cache
+2026-08-15 21:32:50,289 DEBUG Loading model cost 0.906 seconds.
+2026-08-15 21:32:50,289 DEBUG Prefix dict has been built successfully.
+2026-08-15 21:33:21,225 INFO Loading pretrained params from E:\BiliBiliDecoder\models_cache\models\iic--punc_ct-transformer_cn-en-common-vocab471067-large\snapshots\master\model.pt
+2026-08-15 21:33:21,226 INFO ckpt: E:\BiliBiliDecoder\models_cache\models\iic--punc_ct-transformer_cn-en-common-vocab471067-large\snapshots\master\model.pt
+2026-08-15 21:33:22,322 INFO scope_map: ['module.', 'None']
+2026-08-15 21:33:22,322 INFO excludes: None
+2026-08-15 21:33:22,576 INFO Loading ckpt: E:\BiliBiliDecoder\models_cache\models\iic--punc_ct-transformer_cn-en-common-vocab471067-large\snapshots\master\model.pt, status: <All keys matched successfully>
+2026-08-15 21:33:24,171 INFO FunASR model loaded.
+2026-08-15 21:33:24,172 INFO Transcribing C:\Users\Study\AppData\Local\Temp\bilisub_qe7q2e3x\audio_16k.wav ...
+2026-08-15 21:37:16,775 WARNING punctuation timestamps could not be aligned, falling back to VAD segments.
+2026-08-15 21:37:16,808 INFO 分段数: 516
+2026-08-15 21:37:17,314 INFO 转写完成: G:\夏校\2026_08_15_8.2课程回放\7.29课程回放.srt / .md
+2026-08-15 21:37:17,315 INFO ===== 开始 7.31课程回放.mp4 (loudnorm=True) =====
+2026-08-15 21:37:17,315 INFO 导出放大版视频 ...
+2026-08-15 21:44:00,854 INFO 放大版完成: G:\夏校\2026_08_15_8.2课程回放\7.31课程回放_放大.mp4
+2026-08-15 21:44:00,854 INFO 提取音频(16k + loudnorm) ...
+2026-08-15 21:46:26,761 INFO 转写中 ...
+2026-08-15 21:46:26,761 INFO Transcribing C:\Users\Study\AppData\Local\Temp\bilisub_x5elgz1l\audio_16k.wav ...
+2026-08-15 21:52:02,981 WARNING punctuation timestamps could not be aligned, falling back to VAD segments.
+2026-08-15 21:52:03,033 INFO 分段数: 743
+2026-08-15 21:52:03,535 INFO 转写完成: G:\夏校\2026_08_15_8.2课程回放\7.31课程回放.srt / .md
+2026-08-15 21:52:03,535 INFO ===== 开始 20260802134525-会议-视频-1-共享屏幕.mp4 (loudnorm=False) =====
+2026-08-15 21:52:03,536 INFO 提取音频(16k) ...
+2026-08-15 21:52:07,278 INFO 转写中 ...
+2026-08-15 21:52:07,278 INFO Transcribing C:\Users\Study\AppData\Local\Temp\bilisub_t3bhp3zj\audio_16k.wav ...
