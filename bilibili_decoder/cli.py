@@ -317,6 +317,14 @@ def classify_target(line: str):
     return None
 
 
+def _safe_run(fn, label: str) -> None:
+    """执行单个处理项并捕获异常，单个失败不中断后续项。"""
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001
+        log.error("处理失败 %s：%s", label, exc)
+
+
 def _dispatch_target(client: BilibiliClient, target: str, args: argparse.Namespace) -> None:
     """按列表行类型分发：本地文件 / 视频 / UP主 / 搜索。"""
     classified = classify_target(target)
@@ -325,19 +333,19 @@ def _dispatch_target(client: BilibiliClient, target: str, args: argparse.Namespa
         return
     kind, value = classified
     if kind == "local":
-        process_local_file(value, args)
+        _safe_run(lambda: process_local_file(value, args), value)
     elif kind == "video":
-        process_video(client, value, args)
+        _safe_run(lambda: process_video(client, value, args), value)
     elif kind == "up":
         videos = crawl_up(client, value, args)
         log.info("UP主 %s：共 %d 个视频", value, len(videos))
         for v in videos:
-            process_video(client, v.bvid, args)
+            _safe_run(lambda: process_video(client, v.bvid, args), v.bvid)
     else:  # search
         videos = crawl_search(client, value, args.max)
         log.info("搜索“%s”：共 %d 个视频", value, len(videos))
         for v in videos:
-            process_video(client, v.bvid, args)
+            _safe_run(lambda: process_video(client, v.bvid, args), v.bvid)
 
 
 # ----------------------------------------------------------------------
