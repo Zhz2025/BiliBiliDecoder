@@ -74,7 +74,9 @@ def _write_outputs(
             srt_out.write_srt(path, segments)
         elif fmt == "md":
             path = base + ".md"
-            md_out.write_markdown(path, segments, title=md_title, url=url, source=source)
+            md_out.write_markdown(
+                path, segments, title=md_title, url=url, source=source, desc=video.desc
+            )
         else:
             log.warning("Unsupported format: %s", fmt)
             continue

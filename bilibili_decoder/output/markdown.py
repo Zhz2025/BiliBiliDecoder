@@ -19,6 +19,7 @@ def to_markdown(
     title: str = "",
     url: str = "",
     source: str = "",
+    desc: str = "",
 ) -> str:
     lines: list[str] = []
     if title:
@@ -29,6 +30,12 @@ def to_markdown(
     if source:
         lines.append("")
         lines.append(f"> 字幕来源：{source}")
+    if desc and desc.strip():
+        lines.append("")
+        lines.append("## 简介")
+        lines.append("")
+        for dl in str(desc).strip().splitlines():
+            lines.append(dl)
     lines.append("")
     lines.append("## 完整口播")
     lines.append("")
@@ -44,6 +51,7 @@ def write_markdown(
     title: str = "",
     url: str = "",
     source: str = "",
+    desc: str = "",
 ) -> None:
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(to_markdown(segments, title=title, url=url, source=source))
+        fh.write(to_markdown(segments, title=title, url=url, source=source, desc=desc))
