@@ -2,6 +2,10 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
+REM Disable QuickEdit for THIS window only (clicking the window would otherwise
+REM pause the running download until you press Enter).
+if exist "%~dp0disable_quickedit.ps1" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0disable_quickedit.ps1" 2>nul
+
 REM ============================================================
 REM  Bilibili Subtitle Downloader (double-click to run)
 REM  Edit the options below, save, then double-click this file.

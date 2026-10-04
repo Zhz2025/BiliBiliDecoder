@@ -15,6 +15,8 @@ import os
 import shutil
 import sys
 import tempfile
+import time
+from datetime import datetime
 from typing import Optional
 
 from .api.client import BilibiliClient, parse_bvid, parse_mid
@@ -85,9 +87,29 @@ def _write_outputs(
     return written
 
 
+def _resolve_group_name(args: argparse.Namespace) -> Optional[str]:
+    """解析 --group 的文件夹名，统一加 `group_` 前缀便于检索。
+
+    --group NAME  -> group_NAME
+    --group       -> 自动：search 用关键词、up 用 mid、其余用 group
+    """
+    g = getattr(args, "group", None)
+    if g is None:
+        return None
+    if g == "__auto__":
+        if getattr(args, "keyword", ""):
+            g = args.keyword
+        elif getattr(args, "target", ""):
+            g = str(parse_mid(args.target) or args.target)
+        else:
+            g = "group"
+    return "group_" + sanitize_name(str(g), fallback="group")
+
+
 def _up_dir(args: argparse.Namespace, video: VideoInfo) -> str:
-    """Per-UP主 output folder: <out>/<UP主名>/"""
-    up_dir = os.path.join(args.out, video.safe_owner)
+    """输出目录：指定 --group 时统一放 <out>/group_xxx/，否则按 <out>/UP主名/。"""
+    group = getattr(args, "group_dir", None)
+    up_dir = os.path.join(args.out, group if group else video.safe_owner)
     os.makedirs(up_dir, exist_ok=True)
     return up_dir
 
@@ -142,7 +164,14 @@ def _process_one(client: BilibiliClient, bvid: str, video: VideoInfo,
     segments: Optional[list] = None
     source = ""
     if not args.force_stt:
-        segments = subtitles.fetch_segments(client, bvid, part.cid, prefer=args.lang)
+        try:
+            segments = subtitles.fetch_segments(client, bvid, part.cid, prefer=args.lang)
+        except subtitles.SubtitleQueryError as exc:
+            # 查询失败 ≠ 没有字幕：跳过该视频，避免白白做几十分钟的本地转写
+            log.warning("%s字幕接口查询失败（%s）——跳过以免无谓转写，可稍后重跑",
+                        prefix, exc)
+            _count_failure()
+            return
         if segments:
             source = f"AI字幕（{args.lang}）"
 
@@ -243,11 +272,42 @@ def process_video(client: BilibiliClient, bvid: str, args: argparse.Namespace) -
 # ----------------------------------------------------------------------
 # UP主 crawling
 # ----------------------------------------------------------------------
-def crawl_up(client: BilibiliClient, mid: int, args: argparse.Namespace) -> list[VideoInfo]:
+def _filter_tag(videos: list[VideoInfo], tag: str) -> list[VideoInfo]:
+    if not tag:
+        return videos
+    t = tag.lower()
+    return [v for v in videos if t in v.title.lower()]
+
+
+def _parse_since(s: Optional[str]) -> float:
+    """把 --since YYYY-MM-DD 解析为时间戳（当天 00:00）。"""
+    if not s:
+        return 0.0
+    try:
+        return datetime.strptime(s.strip(), "%Y-%m-%d").timestamp()
+    except ValueError:
+        log.warning("--since 日期格式应为 YYYY-MM-DD，已忽略：%s", s)
+        return 0.0
+
+
+def _filter_videos(videos: list[VideoInfo], tag: str, since_ts: float) -> list[VideoInfo]:
+    """按标题关键词 + 发布日期过滤。"""
+    out = videos
+    if tag:
+        t = tag.lower()
+        out = [v for v in out if t in v.title.lower()]
+    if since_ts:
+        out = [v for v in out if not v.pubdate or v.pubdate >= since_ts]
+    return out
+
+
+def _crawl_up_web(client: BilibiliClient, mid: int, args: argparse.Namespace) -> list[VideoInfo]:
+    """Web 接口爬取（WBI 签名）。"""
     if args.all:
         page_size, limit = 30, 0  # 0 == unlimited
     else:
         page_size, limit = 50, args.recent or 30
+    since = _parse_since(getattr(args, "since", ""))
 
     videos: list[VideoInfo] = []
     page = 1
@@ -255,30 +315,68 @@ def crawl_up(client: BilibiliClient, mid: int, args: argparse.Namespace) -> list
         batch = client.get_up_videos(mid, page=page, page_size=page_size)
         if not batch:
             break
-        if args.tag:
-            tag = args.tag.lower()
-            batch = [v for v in batch if tag in v.title.lower()]
-        videos.extend(batch)
+        videos.extend(_filter_videos(batch, args.tag, since))
         if limit and len(videos) >= limit:
-            videos = videos[:limit]
+            return videos[:limit]
+        # 视频按时间倒序，最后一页已早于 --since 则可提前结束
+        if since and batch[-1].pubdate and batch[-1].pubdate < since:
             break
         if len(batch) < page_size:
             break
         page += 1
+        time.sleep(1.0)  # 翻页间隔，降低触发风控概率
     return videos
 
 
-def crawl_search(client: BilibiliClient, keyword: str, maximum: int) -> list[VideoInfo]:
+def _crawl_up_app(client: BilibiliClient, mid: int, args: argparse.Namespace) -> list[VideoInfo]:
+    """手机端接口爬取（appkey 签名，风控较弱）——Web 被 412 拦截时的备用通道。"""
+    page_size = 20
+    limit = 0 if args.all else (args.recent or 30)
+    since = _parse_since(getattr(args, "since", ""))
+
     videos: list[VideoInfo] = []
     page = 1
-    while len(videos) < maximum:
-        batch = client.search_videos(keyword, page=page)
+    while True:
+        batch, has_more = client.get_up_videos_app(mid, page=page, page_size=page_size)
         if not batch:
             break
-        videos.extend(batch)
-        if len(batch) < 20:
+        videos.extend(_filter_videos(batch, args.tag, since))
+        if limit and len(videos) >= limit:
+            return videos[:limit]
+        if since and batch[-1].pubdate and batch[-1].pubdate < since:
+            break
+        if not has_more:
             break
         page += 1
+        time.sleep(1.0)
+    return videos
+
+
+def crawl_up(client: BilibiliClient, mid: int, args: argparse.Namespace) -> list[VideoInfo]:
+    """爬取 UP主视频列表：优先 Web 接口，被风控拦截时自动切换手机端接口重爬。"""
+    try:
+        return _crawl_up_web(client, mid, args)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Web 接口爬取 UP主失败（%s），改用手机端接口重新爬取...", exc)
+        return _crawl_up_app(client, mid, args)
+
+
+MAX_SEARCH_PAGES = 50  # B站搜索接口最多 50 页
+
+
+def crawl_search(client: BilibiliClient, keyword: str, maximum: int) -> list[VideoInfo]:
+    """按关键词搜索，按接口返回的总页数翻页（避免过早停止）。"""
+    videos: list[VideoInfo] = []
+    page = 1
+    while len(videos) < maximum and page <= MAX_SEARCH_PAGES:
+        batch, num_pages = client.search_videos_page(keyword, page=page)
+        videos.extend(batch)
+        if num_pages and page >= num_pages:
+            break
+        if not batch:
+            break  # 本页没有有效视频，结束
+        page += 1
+        time.sleep(0.5)  # 翻页间隔
     return videos[:maximum]
 
 
@@ -319,12 +417,47 @@ def classify_target(line: str):
     return None
 
 
-def _safe_run(fn, label: str) -> None:
+# 单次运行失败超过该数量即告警（通常是 Cookie/令牌失效）并中断剩余任务
+FAIL_ALERT_THRESHOLD = 10
+_failures = 0
+
+
+def _log_threshold_alert() -> None:
+    log.error("=" * 64)
+    log.error("⚠ 已失败 %d 项（超过阈值 %d）—— Cookie/令牌可能已过期！",
+              _failures, FAIL_ALERT_THRESHOLD)
+    log.error("  请更新 cookie.txt 后重新运行（已下载的会自动跳过）")
+    log.error("=" * 64)
+
+
+def _count_failure() -> None:
+    """记录一次失败；首次越过阈值时给出醒目告警。"""
+    global _failures
+    _failures += 1
+    if _failures == FAIL_ALERT_THRESHOLD + 1:
+        _log_threshold_alert()
+
+
+def _safe_run(fn, label: str) -> bool:
     """执行单个处理项并捕获异常，单个失败不中断后续项。"""
     try:
         fn()
+        return True
     except Exception as exc:  # noqa: BLE001
+        _count_failure()
         log.error("处理失败 %s：%s", label, exc)
+        return False
+
+
+def _process_videos_guarded(client: BilibiliClient, videos: list[VideoInfo],
+                            args: argparse.Namespace) -> None:
+    """逐个下载；失败数超过阈值时中断剩余任务（避免令牌失效后无效刷请求）。"""
+    for v in videos:
+        if _failures > FAIL_ALERT_THRESHOLD:
+            log.error("失败过多（%d 项），已中断本次剩余任务；请更新 cookie.txt 后重跑",
+                      _failures)
+            return
+        _safe_run(lambda: process_video(client, v.bvid, args), v.bvid)
 
 
 def _dispatch_target(client: BilibiliClient, target: str, args: argparse.Namespace) -> None:
@@ -341,13 +474,11 @@ def _dispatch_target(client: BilibiliClient, target: str, args: argparse.Namespa
     elif kind == "up":
         videos = crawl_up(client, value, args)
         log.info("UP主 %s：共 %d 个视频", value, len(videos))
-        for v in videos:
-            _safe_run(lambda: process_video(client, v.bvid, args), v.bvid)
+        _process_videos_guarded(client, videos, args)
     else:  # search
         videos = crawl_search(client, value, args.max)
         log.info("搜索“%s”：共 %d 个视频", value, len(videos))
-        for v in videos:
-            _safe_run(lambda: process_video(client, v.bvid, args), v.bvid)
+        _process_videos_guarded(client, videos, args)
 
 
 # ----------------------------------------------------------------------
@@ -454,6 +585,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--cookie-file", default="",
         help="从文件读取 Cookie 字符串（更安全，文件内只放 Cookie 内容）",
     )
+    common.add_argument(
+        "--group", nargs="?", const="__auto__", default=None, metavar="NAME",
+        help="把本次全部文件统一放入 <输出目录>/group_<名称>/（不加值则自动用关键词/UP主 mid）",
+    )
 
     # 本地文件转写相关选项（local 命令与 batch 列表中的本地文件条目共用）
     local_opts = argparse.ArgumentParser(add_help=False)
@@ -481,6 +616,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_batch.add_argument("--all", action="store_true", help="列表中的 UP 主条目：抓取全部视频")
     p_batch.add_argument("--recent", type=int, default=0, help="列表中的 UP 主条目：抓取最近 N 个（默认 30）")
     p_batch.add_argument("--tag", default="", help="列表中的 UP 主条目：仅处理标题含该关键词的视频")
+    p_batch.add_argument("--since", default="", help="列表中的 UP 主条目：仅处理该日期之后发布的视频（YYYY-MM-DD）")
     p_batch.add_argument("--max", type=int, default=20, help="列表中的 search 条目：最多处理结果数")
 
     p_up = sub.add_parser("up", parents=[common], help="爬取某 UP 主的视频字幕")
@@ -489,6 +625,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--all", action="store_true", help="爬取该 UP 主全部视频")
     mode.add_argument("--recent", type=int, default=0, help="爬取最近 N 个视频（默认 30）")
     p_up.add_argument("--tag", default="", help="仅处理标题包含该关键词的视频")
+    p_up.add_argument("--since", default="", help="仅处理该日期之后发布的视频（YYYY-MM-DD）")
 
     p_search = sub.add_parser("search", parents=[common], help="按关键词搜索视频并下载字幕")
     p_search.add_argument("keyword", help="搜索关键词")
@@ -510,6 +647,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    global _failures
+    _failures = 0
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -518,6 +657,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     if args.command == "clean":
         return cmd_clean(args)
+
+    # --group：统一输出文件夹（带 group_ 前缀）
+    args.group_dir = _resolve_group_name(args)
+    if args.group_dir:
+        log.info("本次全部文件统一输出到：%s", os.path.join(args.out, args.group_dir))
 
     cookie = args.cookie
     if args.cookie_file:
@@ -561,20 +705,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 1
         videos = crawl_up(client, mid, args)
         log.info("共找到 %d 个视频（UP主 mid=%s）", len(videos), mid)
-        for v in videos:
-            try:
-                process_video(client, v.bvid, args)
-            except Exception as exc:  # noqa: BLE001
-                log.error("处理失败 %s：%s", v.bvid, exc)
+        _process_videos_guarded(client, videos, args)
         return 0
     elif args.command == "search":
         videos = crawl_search(client, args.keyword, args.max)
         log.info("关键词“%s”共找到 %d 个视频", args.keyword, len(videos))
-        for v in videos:
-            try:
-                process_video(client, v.bvid, args)
-            except Exception as exc:  # noqa: BLE001
-                log.error("处理失败 %s：%s", v.bvid, exc)
+        _process_videos_guarded(client, videos, args)
         return 0
     elif args.command == "local":
         for target in args.targets:

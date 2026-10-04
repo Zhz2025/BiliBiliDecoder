@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
+import urllib.parse
 from typing import Optional
 
 import requests
@@ -23,6 +25,20 @@ BVID_RE = re.compile(r"(BV[0-9A-Za-z]{10})")
 MID_RE = re.compile(r"(?:space\.bilibili\.com/|mid=)(\d+)")
 
 REFERER = "https://www.bilibili.com/"
+
+# 手机端 API 签名用的公开 appkey/appsec（用于风控较弱的备用通道）
+APPKEY = "1d8b6e7d45233436"
+APPSEC = "560c52ccd288fed045859ed18bffd973"
+
+
+def appsign(params: dict) -> dict:
+    """手机端 API 签名：appkey + ts + sign=md5(sorted_query + appsec)。"""
+    params = dict(params)
+    params["appkey"] = APPKEY
+    params["ts"] = int(time.time())
+    query = urllib.parse.urlencode(dict(sorted(params.items())))
+    params["sign"] = hashlib.md5((query + APPSEC).encode("utf-8")).hexdigest()
+    return params
 
 
 def parse_bvid(text: str) -> Optional[str]:
@@ -50,7 +66,7 @@ def _parse_length(length: str) -> int:
 class BilibiliClient:
     """Thin wrapper around Bilibili's web API."""
 
-    def __init__(self, cookie: str = "", timeout: float = 15.0, retries: int = 3) -> None:
+    def __init__(self, cookie: str = "", timeout: float = 15.0, retries: int = 8) -> None:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": UA, "Referer": REFERER})
         if cookie:
@@ -79,24 +95,36 @@ class BilibiliClient:
         except Exception:
             log.debug("Failed to obtain buvid3", exc_info=True)
 
-    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+    def _request(self, method: str, url: str, params=None, sign: bool = False,
+                 max_wait: float = 6.0, **kwargs) -> requests.Response:
+        """HTTP 请求，带自动重试。
+
+        重要：`sign=True` 时**每次重试都会重新生成 WBI 签名**（新的 wts/w_rid）。
+        因为 B 站风控是随机拦截的——复用旧签名重试可能一直失败，换个新签名
+        往往就能通过。
+        """
         kwargs.setdefault("timeout", self.timeout)
         last_exc: Optional[Exception] = None
         for attempt in range(self.retries):
             try:
-                resp = self.session.request(method, url, **kwargs)
+                req_params = self._sign(dict(params or {})) if sign else params
+                resp = self.session.request(method, url, params=req_params, **kwargs)
+                # B站风控会随机返回 412（拦截图）
+                if resp.status_code == 412:
+                    raise RuntimeError("HTTP 412（B站风控拦截，稍后重试）")
                 resp.raise_for_status()
                 return resp
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 log.debug("Request failed (%s): %s", url, exc)
-                time.sleep(0.5 * (attempt + 1))
-        raise RuntimeError(f"Request failed after {self.retries} tries: {url}") from last_exc
+                if attempt < self.retries - 1:
+                    time.sleep(min(0.8 * (attempt + 1), max_wait))
+        raise RuntimeError(
+            f"Request failed after {self.retries} tries ({last_exc}): {url}"
+        ) from last_exc
 
     def _get_json(self, url: str, params: Optional[dict] = None, signed: bool = False) -> dict:
-        if signed:
-            params = self._sign(params or {})
-        resp = self._request("GET", url, params=params)
+        resp = self._request("GET", url, params=params, sign=signed)
         return resp.json()
 
     def _sign(self, params: dict) -> dict:
@@ -225,10 +253,53 @@ class BilibiliClient:
             )
         return videos
 
+    def get_up_videos_app(
+        self, mid: int, page: int = 1, page_size: int = 20
+    ) -> tuple[list[VideoInfo], bool]:
+        """手机端 API 获取 UP主视频（appkey 签名，风控较弱）。
+
+        返回 (视频列表, 是否还有下一页)。
+        """
+        params = appsign({
+            "vmid": mid, "ps": page_size, "pn": page, "order": "pubdate",
+            "platform": "android", "mobi_app": "android", "build": 7001400,
+        })
+        resp = self._request(
+            "GET", "https://app.bilibili.com/x/v2/space/archive/cursor", params=params
+        )
+        data = (resp.json() or {}).get("data") or {}
+        videos: list[VideoInfo] = []
+        for it in data.get("item") or []:
+            bvid = it.get("bvid", "")
+            if not bvid:
+                continue
+            videos.append(
+                VideoInfo(
+                    bvid=bvid,
+                    aid=int(it.get("param", 0) or 0),
+                    cid=int(it.get("first_cid", 0) or 0),
+                    title=it.get("title", ""),
+                    duration=int(it.get("duration", 0) or 0),
+                    owner_mid=mid,
+                    owner_name=it.get("author", ""),
+                    pic=it.get("cover", ""),
+                    pubdate=int(it.get("ctime", 0) or 0),
+                )
+            )
+        return videos, bool(data.get("has_next", 0))
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
-    def search_videos(self, keyword: str, page: int = 1, page_size: int = 20) -> list[VideoInfo]:
+    def search_videos_page(
+        self, keyword: str, page: int = 1, page_size: int = 20
+    ) -> tuple[list[VideoInfo], int]:
+        """搜索一页，返回 (视频列表, 总页数)。
+
+        注意：每页原始结果会混有"课堂""直播"等非普通视频条目（会被过滤掉），
+        所以**不能用过滤后的条数判断是否还有下一页**，必须用接口返回的
+        `numPages` 来推进分页。
+        """
         data = self._get_json(
             "https://api.bilibili.com/x/web-interface/search/type",
             params={
@@ -260,4 +331,8 @@ class BilibiliClient:
                     pubdate=int(r.get("pubdate", 0) or 0),
                 )
             )
-        return videos
+        return videos, int(data.get("numPages", 0) or 0)
+
+    def search_videos(self, keyword: str, page: int = 1, page_size: int = 20) -> list[VideoInfo]:
+        """搜索一页，只返回视频列表（兼容旧调用）。"""
+        return self.search_videos_page(keyword, page=page, page_size=page_size)[0]
